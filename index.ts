@@ -50,9 +50,17 @@ server.tool(
     
     if (!fromEmail) throw new Error('From address is missing');
 
+    // FIX: Gebruik camelCase (replyTo, scheduledAt) voor de SDK
     const response = await resend.emails.send({
-      from: fromEmail, to, subject, text, html, 
-      reply_to: replyToEmails, cc, bcc, scheduled_at: scheduledAt
+      from: fromEmail, 
+      to, 
+      subject, 
+      text, 
+      html, 
+      replyTo: replyToEmails, // Was foutief 'reply_to'
+      cc, 
+      bcc, 
+      scheduledAt: scheduledAt // Was foutief 'scheduled_at'
     });
 
     if (response.error) throw new Error(`Failed: ${JSON.stringify(response.error)}`);
@@ -65,7 +73,7 @@ server.tool('list-audiences', 'List Resend audiences', {}, async () => {
   return { content: [{ type: 'text', text: JSON.stringify(r.data) }] };
 });
 
-// --- DE BELANGRIJKSTE WIJZIGING: KIES TUSSEN WEB OF LOKAAL ---
+// --- SERVER OPSTARTEN (WEB of LOKAAL) ---
 async function main() {
   const port = process.env.PORT; // Render vult dit automatisch in
 
