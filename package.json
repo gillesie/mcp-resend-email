@@ -21,6 +21,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
+    "start": "node build/index.js",
     "lint:fix": "biome check . --write",
     "lint": "biome check ."
   }
