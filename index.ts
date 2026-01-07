@@ -12,7 +12,7 @@ const argv = minimist(process.argv.slice(2));
 const apiKey = argv.key || process.env.RESEND_API_KEY;
 const senderEmailAddress = argv.sender || process.env.SENDER_EMAIL_ADDRESS;
 
-// Reply-to logica
+// Reply-to logica (standaard leeg array)
 let replierEmailAddresses: string[] = [];
 if (Array.isArray(argv['reply-to'])) replierEmailAddresses = argv['reply-to'];
 else if (typeof argv['reply-to'] === 'string') replierEmailAddresses = [argv['reply-to']];
@@ -34,6 +34,7 @@ server.tool(
   'send-email',
   'Send an email using Resend',
   {
+    // We maken alle velden hier expliciet (en optioneel), dat voorkomt de TS error.
     to: z.string().email().describe('Recipient email address'),
     subject: z.string().describe('Email subject line'),
     text: z.string().describe('Plain text email content'),
@@ -41,26 +42,32 @@ server.tool(
     cc: z.string().email().array().optional(),
     bcc: z.string().email().array().optional(),
     scheduledAt: z.string().optional(),
-    ...(!senderEmailAddress ? { from: z.string().email().nonempty() } : {}),
-    ...(replierEmailAddresses.length === 0 ? { replyTo: z.string().email().array().optional() } : {}),
+    from: z.string().email().optional().describe('Sender email address (overrides env var)'),
+    replyTo: z.string().email().array().optional().describe('Reply-to addresses (overrides env var)'),
   },
   async ({ from, to, subject, text, html, replyTo, scheduledAt, cc, bcc }) => {
-    const fromEmail = from ?? senderEmailAddress;
-    const replyToEmails = replyTo ?? replierEmailAddresses;
+    // Logica: Gebruik input argument, anders fallback naar env var.
+    const fromEmail = from || senderEmailAddress;
+    const replyToEmails = replyTo || replierEmailAddresses;
     
-    if (!fromEmail) throw new Error('From address is missing');
+    // Validatie achteraf (in plaats van in het schema)
+    if (!fromEmail) {
+      throw new Error('From address is missing. Please provide it as argument or set SENDER_EMAIL_ADDRESS env var.');
+    }
 
-    // FIX: Gebruik camelCase (replyTo, scheduledAt) voor de SDK
+    // Expliciet type-casten om TS gerust te stellen
+    const finalReplyTo: string[] | undefined = replyToEmails.length > 0 ? replyToEmails : undefined;
+
     const response = await resend.emails.send({
       from: fromEmail, 
       to, 
       subject, 
       text, 
       html, 
-      replyTo: replyToEmails, // Was foutief 'reply_to'
+      replyTo: finalReplyTo,
       cc, 
       bcc, 
-      scheduledAt: scheduledAt // Was foutief 'scheduled_at'
+      scheduledAt: scheduledAt 
     });
 
     if (response.error) throw new Error(`Failed: ${JSON.stringify(response.error)}`);
@@ -73,12 +80,12 @@ server.tool('list-audiences', 'List Resend audiences', {}, async () => {
   return { content: [{ type: 'text', text: JSON.stringify(r.data) }] };
 });
 
-// --- SERVER OPSTARTEN (WEB of LOKAAL) ---
+// --- SERVER OPSTARTEN ---
 async function main() {
-  const port = process.env.PORT; // Render vult dit automatisch in
+  const port = process.env.PORT; 
 
   if (port) {
-    // We draaien op Render -> Start Express Webserver (SSE)
+    // Render / Web Mode
     const app = express();
     let transport: SSEServerTransport;
 
@@ -94,7 +101,7 @@ async function main() {
 
     app.listen(port, () => console.log(`Listening on port ${port}`));
   } else {
-    // We draaien lokaal -> Start Stdio
+    // Local CLI Mode
     const transport = new StdioServerTransport();
     await server.connect(transport);
   }
