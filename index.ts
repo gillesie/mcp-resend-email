@@ -7,22 +7,16 @@ import { Resend } from 'resend';
 import { z } from 'zod';
 import packageJson from './package.json' with { type: 'json' };
 
-// Parse command line arguments
+// --- CONFIGURATIE ---
 const argv = minimist(process.argv.slice(2));
-
-// Get API key
 const apiKey = argv.key || process.env.RESEND_API_KEY;
 const senderEmailAddress = argv.sender || process.env.SENDER_EMAIL_ADDRESS;
 
-// Get reply to email addresses
+// Reply-to logica
 let replierEmailAddresses: string[] = [];
-if (Array.isArray(argv['reply-to'])) {
-  replierEmailAddresses = argv['reply-to'];
-} else if (typeof argv['reply-to'] === 'string') {
-  replierEmailAddresses = [argv['reply-to']];
-} else if (process.env.REPLY_TO_EMAIL_ADDRESSES) {
-  replierEmailAddresses = process.env.REPLY_TO_EMAIL_ADDRESSES.split(',');
-}
+if (Array.isArray(argv['reply-to'])) replierEmailAddresses = argv['reply-to'];
+else if (typeof argv['reply-to'] === 'string') replierEmailAddresses = [argv['reply-to']];
+else if (process.env.REPLY_TO_EMAIL_ADDRESSES) replierEmailAddresses = process.env.REPLY_TO_EMAIL_ADDRESSES.split(',');
 
 if (!apiKey) {
   console.error('No API key provided. Set RESEND_API_KEY.');
@@ -30,13 +24,12 @@ if (!apiKey) {
 }
 
 const resend = new Resend(apiKey);
-
-// Create server instance
 const server = new McpServer({
   name: 'email-sending-service',
   version: packageJson.version,
 });
 
+// --- TOOLS DEFINIËREN ---
 server.tool(
   'send-email',
   'Send an email using Resend',
@@ -44,94 +37,59 @@ server.tool(
     to: z.string().email().describe('Recipient email address'),
     subject: z.string().describe('Email subject line'),
     text: z.string().describe('Plain text email content'),
-    html: z.string().optional().describe('HTML email content. Optional.'),
-    cc: z.string().email().array().optional().describe('CC addresses'),
-    bcc: z.string().email().array().optional().describe('BCC addresses'),
-    scheduledAt: z.string().optional().describe("Natural language scheduling (e.g., 'tomorrow at 10am')"),
-    ...(!senderEmailAddress ? {
-          from: z.string().email().nonempty().describe('Sender email address (required if not configured env var)'),
-        } : {}),
-    ...(replierEmailAddresses.length === 0 ? {
-          replyTo: z.string().email().array().optional().describe('Reply-to addresses'),
-        } : {}),
+    html: z.string().optional().describe('HTML email content'),
+    cc: z.string().email().array().optional(),
+    bcc: z.string().email().array().optional(),
+    scheduledAt: z.string().optional(),
+    ...(!senderEmailAddress ? { from: z.string().email().nonempty() } : {}),
+    ...(replierEmailAddresses.length === 0 ? { replyTo: z.string().email().array().optional() } : {}),
   },
   async ({ from, to, subject, text, html, replyTo, scheduledAt, cc, bcc }) => {
-    const fromEmailAddress = from ?? senderEmailAddress;
-    const replyToEmailAddresses = replyTo ?? replierEmailAddresses;
-
-    if (typeof fromEmailAddress !== 'string') throw new Error('from argument missing.');
+    const fromEmail = from ?? senderEmailAddress;
+    const replyToEmails = replyTo ?? replierEmailAddresses;
     
-    const emailRequest: any = {
-      to, subject, text, from: fromEmailAddress, replyTo: replyToEmailAddresses,
-    };
-    if (html) emailRequest.html = html;
-    if (scheduledAt) emailRequest.scheduledAt = scheduledAt;
-    if (cc) emailRequest.cc = cc;
-    if (bcc) emailRequest.bcc = bcc;
+    if (!fromEmail) throw new Error('From address is missing');
 
-    console.error(`Sending email to ${to} from ${fromEmailAddress}`);
-    const response = await resend.emails.send(emailRequest);
+    const response = await resend.emails.send({
+      from: fromEmail, to, subject, text, html, 
+      reply_to: replyToEmails, cc, bcc, scheduled_at: scheduledAt
+    });
 
-    if (response.error) {
-      throw new Error(`Email failed: ${JSON.stringify(response.error)}`);
-    }
-
-    return {
-      content: [{ type: 'text', text: `Email sent! ID: ${response.data?.id}` }],
-    };
-  },
+    if (response.error) throw new Error(`Failed: ${JSON.stringify(response.error)}`);
+    return { content: [{ type: 'text', text: `Sent! ID: ${response.data?.id}` }] };
+  }
 );
 
-server.tool(
-  'list-audiences',
-  'List all audiences from Resend',
-  {},
-  async () => {
-    const response = await resend.audiences.list();
-    if (response.error) throw new Error(`Failed to list audiences: ${JSON.stringify(response.error)}`);
-    return {
-      content: [{ type: 'text', text: `Audiences: ${JSON.stringify(response.data)}` }],
-    };
-  },
-);
+server.tool('list-audiences', 'List Resend audiences', {}, async () => {
+  const r = await resend.audiences.list();
+  return { content: [{ type: 'text', text: JSON.stringify(r.data) }] };
+});
 
+// --- DE BELANGRIJKSTE WIJZIGING: KIES TUSSEN WEB OF LOKAAL ---
 async function main() {
-  // Detect if we are running on Render (PORT env var is present)
-  const port = process.env.PORT;
+  const port = process.env.PORT; // Render vult dit automatisch in
 
   if (port) {
-    // --- HOSTED MODE (SSE) ---
+    // We draaien op Render -> Start Express Webserver (SSE)
     const app = express();
-    
-    // Set up SSE transport
     let transport: SSEServerTransport;
 
     app.get('/sse', async (req, res) => {
-      console.log('New SSE connection');
+      console.log('SSE verbinding gestart');
       transport = new SSEServerTransport('/messages', res);
       await server.connect(transport);
     });
 
     app.post('/messages', async (req, res) => {
-      if (transport) {
-        await transport.handlePostMessage(req, res);
-      } else {
-        res.status(400).send('No active connection');
-      }
+      if (transport) await transport.handlePostMessage(req, res);
     });
 
-    app.listen(port, () => {
-      console.log(`MCP Server is running on port ${port} (SSE Mode)`);
-    });
+    app.listen(port, () => console.log(`Listening on port ${port}`));
   } else {
-    // --- LOCAL MODE (Stdio) ---
+    // We draaien lokaal -> Start Stdio
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.error('MCP Server running on stdio');
   }
 }
 
-main().catch((error) => {
-  console.error('Fatal error:', error);
-  process.exit(1);
-});
+main().catch(console.error);
