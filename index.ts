@@ -44,10 +44,13 @@ function createServer() {
       replyTo: z.string().email().array().optional(),
       scheduledAt: z.string().optional(),
     },
+    // ... binnen de 'send-email' tool ...
     async ({ to, subject, text, html, from, cc, bcc, replyTo, scheduledAt }) => {
       const fromEmail = from || senderEmailAddress;
       const replyToEmails = replyTo || replierEmailAddresses;
       
+      console.log(`[TEST] Poging tot versturen naar: ${to}`); // <--- TOEVOEGEN
+
       if (!fromEmail) throw new Error('MISSING_FROM: Sender email is required via arg or env var.');
       
       const response = await resend.emails.send({
@@ -56,6 +59,9 @@ function createServer() {
         replyTo: replyToEmails.length > 0 ? replyToEmails : undefined
       });
       
+      // <--- TOEVOEGEN: DIT IS HET BEWIJS
+      console.log(`[TEST] Resend Antwoord:`, JSON.stringify(response)); 
+
       if (response.error) throw new Error(`RESEND_ERROR: ${JSON.stringify(response.error)}`);
       return { content: [{ type: 'text', text: `Email sent! ID: ${response.data?.id}` }] };
     }
